@@ -1,45 +1,95 @@
-import cv2
-import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+from torchvision import transforms
+from torchvision.datasets import ImageFolder
+from torch.utils.data import DataLoader
+from torchvision import models
 
-# Načtení obrázku
-img = cv2.imread('mince3.jpg')
+# Definice transformací
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.RandomRotation(360),      # Přidání augmentace dat
+    transforms.ToTensor(),
+])
 
-# Převedení obrázku na odstíny šedi
-gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+# Cesta k datasetu
+data_path = 'C:\\Users\\krake\\mince\\Dataset'
 
-# Binarizace obrázku
-ret, binary = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+# Vytvoření ImageFolder datasetu
+dataset = ImageFolder(root=data_path, transform=transform)
 
-kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
-binary = cv2.dilate(binary, kernel, iterations=1)
+# Rozdělení datasetu na trénovací, validační a testovací část
+train_size = int(0.60 * len(dataset))
+val_size = int(0.30 * len(dataset))
+test_size = len(dataset) - train_size - val_size
 
+train_dataset, val_dataset, test_dataset = torch.utils.data.random_split(dataset, [train_size, val_size, test_size])
 
-# Nalezne kontury na binárním obrázku
-contours, hierarchy = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+# DataLoader pro trénovací, validační a testovací množinu
+batch_size = 256  # Zvolte vhodnou velikost dávky
+train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
-# Vytvoření slovníku pro ukládání výsledků
-coins = {}
+# Definice modelu
+class SimpleModel(nn.Module):
+    def __init__(self, num_classes):
+        super(SimpleModel, self).__init__()
+        self.features = models.resnet18(pretrained=True)
+        in_features = self.features.fc.in_features
+        self.features.fc = nn.Linear(in_features, num_classes)
 
-# Minimální plocha pro filtrování malých kousků mincí
-min_contour_area = 8000
+    def forward(self, x):
+        return self.features(x)
 
-# Procházení kontur
-for i, contour in enumerate(contours):
-    # Vypočet plochy kontury
-    area = cv2.contourArea(contour)
+# Inicializace modelu
+num_classes = len(dataset.classes)
+model = SimpleModel(num_classes)
 
-    # Filtrování malých kontur
-    if area > min_contour_area:
-        # Vytvoření masky pro každou minci
-        mask = np.zeros_like(binary)
-        cv2.drawContours(mask, [contour], 0, (255), thickness=cv2.FILLED)
+# Definice loss funkce a optimalizačního algoritmu
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.Adam(model.parameters(), lr=0.001)
 
-        # Aplikace masky na původní obrázek
-        result = cv2.bitwise_and(img, img, mask=mask)
+# Trénování modelu
+num_epochs = 10
+for epoch in range(num_epochs):
+    model.train()
+    for inputs, labels in train_loader:
+        optimizer.zero_grad()
+        outputs = model(inputs)
+        loss = criterion(outputs, labels)
+        loss.backward()
+        optimizer.step()
 
-        # Uložení výsledného obrázku mince
-        coins[f'coin_{i+1}.jpg'] = result
+    # Validace modelu
+    model.eval()
+    with torch.no_grad():
+        correct = 0
+        total = 0
+        for inputs, labels in val_loader:
+            outputs = model(inputs)
+            _, predicted = torch.max(outputs.data, 1)
+            total += labels.size(0)
+            correct += (predicted == labels).sum().item()
 
-# Uložení jednotlivých mincí
-for name, coin_img in coins.items():
-    cv2.imwrite(name, coin_img)
+        accuracy = correct / total
+        print(f'Epoch {epoch+1}/{num_epochs}, Validation Accuracy: {accuracy:.4f}')
+
+# Testování modelu
+model.eval()
+with torch.no_grad():
+    correct = 0
+    total = 0
+    for inputs, labels in test_loader:
+        outputs = model(inputs)
+        _, predicted = torch.max(outputs.data, 1)
+        total += labels.size(0)
+        correct += (predicted == labels).sum().item()
+
+    test_accuracy = correct / total
+    print(f'Test Accuracy: {test_accuracy:.4f}')
+    
+    
+    
+torch.save(model.state_dict(), 'C:\\Users\\krake\\mince\\model60_11.pth')
